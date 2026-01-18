@@ -102,31 +102,49 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
+      - name: Check existing releases
+        id: check-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_COUNT=$(gh release list --repo ${{ github.repository }} --limit 1 | wc -l)
+          if [ "$RELEASE_COUNT" -eq 0 ]; then
+            echo "no_releases=true" >> $GITHUB_OUTPUT
+          else
+            echo "no_releases=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Check for version changes and prepare release
         id: prepare-release
         run: |
           RELEASE_NEEDED=false
           RELEASE_BODY=""
 
-          for branch in gtl-1431 gtl-1431-skyblock; do
-            if [ -f "version-info-$branch/${branch}-changed.txt" ]; then
-              CHANGED=$(cat "version-info-$branch/${branch}-changed.txt")
-              VERSION=$(cat "version-info-$branch/${branch}-version.txt")
-              if [ "$CHANGED" = "true" ]; then
-                RELEASE_NEEDED=true
-                RELEASE_BODY="${RELEASE_BODY}\n- ${branch}: v${VERSION}"
-              fi
-            fi
-          done
-
-          echo "release_needed=$RELEASE_NEEDED" >> $GITHUB_OUTPUT
-          echo -e "release_body=$RELEASE_BODY" >> $GITHUB_OUTPUT
-
-          # 获取主分支版本作为release tag
+          # 获取主分支版本
           if [ -f "version-info-gtl-1431/gtl-1431-version.txt" ]; then
             MAIN_VERSION=$(cat "version-info-gtl-1431/gtl-1431-version.txt")
             echo "version=$MAIN_VERSION" >> $GITHUB_OUTPUT
           fi
+
+          # 如果没有任何release，直接创建
+          if [ "${{ steps.check-releases.outputs.no_releases }}" = "true" ]; then
+            RELEASE_NEEDED=true
+            RELEASE_BODY="Initial release"
+          else
+            for branch in gtl-1431 gtl-1431-skyblock; do
+              if [ -f "version-info-$branch/${branch}-changed.txt" ]; then
+                CHANGED=$(cat "version-info-$branch/${branch}-changed.txt")
+                VERSION=$(cat "version-info-$branch/${branch}-version.txt")
+                if [ "$CHANGED" = "true" ]; then
+                  RELEASE_NEEDED=true
+                  RELEASE_BODY="${RELEASE_BODY}\n- ${branch}: v${VERSION}"
+                fi
+              fi
+            done
+          fi
+
+          echo "release_needed=$RELEASE_NEEDED" >> $GITHUB_OUTPUT
+          echo -e "release_body=$RELEASE_BODY" >> $GITHUB_OUTPUT
 
       - name: Create Release
         if: steps.prepare-release.outputs.release_needed == 'true'
