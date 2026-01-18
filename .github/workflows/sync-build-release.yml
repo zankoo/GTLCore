@@ -113,7 +113,7 @@ jobs:
             echo "no_releases=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Check for version changes and prepare release
+      - name: Check for version changes
         id: prepare-release
         run: |
           MAIN_CHANGED=false
@@ -121,7 +121,6 @@ jobs:
           MAIN_VERSION=""
           SKYBLOCK_VERSION=""
 
-          # 读取版本信息
           if [ -f "version-info-gtl-1431/gtl-1431-version.txt" ]; then
             MAIN_VERSION=$(cat "version-info-gtl-1431/gtl-1431-version.txt")
             MAIN_CHANGED=$(cat "version-info-gtl-1431/gtl-1431-changed.txt")
@@ -142,47 +141,27 @@ jobs:
           echo "main_version=$MAIN_VERSION" >> $GITHUB_OUTPUT
           echo "skyblock_version=$SKYBLOCK_VERSION" >> $GITHUB_OUTPUT
 
-          # 生成 release 名称和 tag
-          if [ "$MAIN_CHANGED" = "true" ] && [ "$SKYBLOCK_CHANGED" = "true" ]; then
-            TAG="v${MAIN_VERSION}_gtl-1431_v${SKYBLOCK_VERSION}_skyblock"
-            NAME="gtl-1431 v${MAIN_VERSION} & skyblock v${SKYBLOCK_VERSION}"
-            FILES="gtlcore-gtl-1431/*.jar
-          gtlcore-gtl-1431-skyblock/*.jar"
-          elif [ "$MAIN_CHANGED" = "true" ]; then
-            TAG="v${MAIN_VERSION}_gtl-1431"
-            NAME="gtl-1431 v${MAIN_VERSION}"
-            FILES="gtlcore-gtl-1431/*.jar"
-          elif [ "$SKYBLOCK_CHANGED" = "true" ]; then
-            TAG="v${SKYBLOCK_VERSION}_skyblock"
-            NAME="skyblock v${SKYBLOCK_VERSION}"
-            FILES="gtlcore-gtl-1431-skyblock/*.jar"
-          else
-            TAG=""
-            NAME=""
-            FILES=""
-          fi
-
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "name=$NAME" >> $GITHUB_OUTPUT
-          echo "files<<EOF" >> $GITHUB_OUTPUT
-          echo "$FILES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          if [ -n "$TAG" ]; then
-            echo "release_needed=true" >> $GITHUB_OUTPUT
-          else
-            echo "release_needed=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create Release
-        if: steps.prepare-release.outputs.release_needed == 'true'
+      - name: Create gtl-1431 Release
+        if: steps.prepare-release.outputs.main_changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.prepare-release.outputs.tag }}
-          name: ${{ steps.prepare-release.outputs.name }}
-          body: |
-            Auto-release triggered by version update.
-          files: ${{ steps.prepare-release.outputs.files }}
+          tag_name: v${{ steps.prepare-release.outputs.main_version }}_gtl-1431
+          name: gtlcore-gtl-1431 v${{ steps.prepare-release.outputs.main_version }}
+          body: Auto-release triggered by version update.
+          files: gtlcore-gtl-1431/*.jar
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create gtl-1431-skyblock Release
+        if: steps.prepare-release.outputs.skyblock_changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.prepare-release.outputs.skyblock_version }}_gtl-1431-skyblock
+          name: gtlcore-gtl-1431-skyblock v${{ steps.prepare-release.outputs.skyblock_version }}
+          body: Auto-release triggered by version update.
+          files: gtlcore-gtl-1431-skyblock/*.jar
           draft: false
           prerelease: false
         env:
