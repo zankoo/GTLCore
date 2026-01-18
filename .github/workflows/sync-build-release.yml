@@ -1,0 +1,152 @@
+name: Sync Fork, Build and Release
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 每天UTC 2:00运行
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        branch: [gtl-1431, gtl-1431-skyblock]
+
+    outputs:
+      gtl-1431-version: ${{ steps.check-version.outputs.version }}
+      gtl-1431-changed: ${{ steps.check-version.outputs.changed }}
+      gtl-1431-skyblock-version: ${{ steps.check-version.outputs.version }}
+      gtl-1431-skyblock-changed: ${{ steps.check-version.outputs.changed }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get version before sync
+        id: version-before
+        run: |
+          VERSION=$(grep "^mod_version=" gradle.properties | cut -d'=' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Sync fork from upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/AaAdoniSsS/GTLCore.git || true
+          git fetch upstream
+          git merge upstream/${{ matrix.branch }} --no-edit || echo "No changes to merge or merge conflict"
+          git push origin ${{ matrix.branch }} || echo "Nothing to push"
+
+      - name: Get version after sync
+        id: version-after
+        run: |
+          VERSION=$(grep "^mod_version=" gradle.properties | cut -d'=' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check version change
+        id: check-version
+        run: |
+          BEFORE="${{ steps.version-before.outputs.version }}"
+          AFTER="${{ steps.version-after.outputs.version }}"
+          echo "version=$AFTER" >> $GITHUB_OUTPUT
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Version changed from $BEFORE to $AFTER"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged: $AFTER"
+          fi
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        env:
+          GITHUB_ACTION_NUMBER: ${{ github.run_number }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: ./gradlew build --no-daemon
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtlcore-${{ matrix.branch }}
+          path: build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Save version info
+        run: |
+          mkdir -p /tmp/version-info
+          echo "${{ steps.check-version.outputs.version }}" > /tmp/version-info/${{ matrix.branch }}-version.txt
+          echo "${{ steps.check-version.outputs.changed }}" > /tmp/version-info/${{ matrix.branch }}-changed.txt
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-info-${{ matrix.branch }}
+          path: /tmp/version-info/
+
+  release:
+    needs: sync-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Check for version changes and prepare release
+        id: prepare-release
+        run: |
+          RELEASE_NEEDED=false
+          RELEASE_BODY=""
+
+          for branch in gtl-1431 gtl-1431-skyblock; do
+            if [ -f "version-info-$branch/${branch}-changed.txt" ]; then
+              CHANGED=$(cat "version-info-$branch/${branch}-changed.txt")
+              VERSION=$(cat "version-info-$branch/${branch}-version.txt")
+              if [ "$CHANGED" = "true" ]; then
+                RELEASE_NEEDED=true
+                RELEASE_BODY="${RELEASE_BODY}\n- ${branch}: v${VERSION}"
+              fi
+            fi
+          done
+
+          echo "release_needed=$RELEASE_NEEDED" >> $GITHUB_OUTPUT
+          echo -e "release_body=$RELEASE_BODY" >> $GITHUB_OUTPUT
+
+          # 获取主分支版本作为release tag
+          if [ -f "version-info-gtl-1431/gtl-1431-version.txt" ]; then
+            MAIN_VERSION=$(cat "version-info-gtl-1431/gtl-1431-version.txt")
+            echo "version=$MAIN_VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        if: steps.prepare-release.outputs.release_needed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.prepare-release.outputs.version }}
+          name: Release v${{ steps.prepare-release.outputs.version }}
+          body: |
+            Auto-release triggered by version update.
+
+            Changes:
+            ${{ steps.prepare-release.outputs.release_body }}
+
+            Download the appropriate jar for your branch:
+            - `gtlcore-gtl-1431` - Main branch build
+            - `gtlcore-gtl-1431-skyblock` - Skyblock branch build
+          files: |
+            gtlcore-gtl-1431/*.jar
+            gtlcore-gtl-1431-skyblock/*.jar
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
