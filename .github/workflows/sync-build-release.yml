@@ -71,16 +71,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build
-        env:
-          GITHUB_ACTION_NUMBER: ${{ github.run_number }}
-          GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: ./gradlew build --no-daemon
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: gtlcore-${{ matrix.branch }}
-          path: build/libs/*.jar
+          path: |
+            build/libs/*.jar
+            !build/libs/*-sources.jar
           if-no-files-found: error
 
       - name: Save version info
