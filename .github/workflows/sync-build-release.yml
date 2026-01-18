@@ -116,53 +116,73 @@ jobs:
       - name: Check for version changes and prepare release
         id: prepare-release
         run: |
-          RELEASE_NEEDED=false
-          RELEASE_BODY=""
+          MAIN_CHANGED=false
+          SKYBLOCK_CHANGED=false
+          MAIN_VERSION=""
+          SKYBLOCK_VERSION=""
 
-          # 获取主分支版本
+          # 读取版本信息
           if [ -f "version-info-gtl-1431/gtl-1431-version.txt" ]; then
             MAIN_VERSION=$(cat "version-info-gtl-1431/gtl-1431-version.txt")
-            echo "version=$MAIN_VERSION" >> $GITHUB_OUTPUT
+            MAIN_CHANGED=$(cat "version-info-gtl-1431/gtl-1431-changed.txt")
+          fi
+          if [ -f "version-info-gtl-1431-skyblock/gtl-1431-skyblock-version.txt" ]; then
+            SKYBLOCK_VERSION=$(cat "version-info-gtl-1431-skyblock/gtl-1431-skyblock-version.txt")
+            SKYBLOCK_CHANGED=$(cat "version-info-gtl-1431-skyblock/gtl-1431-skyblock-changed.txt")
           fi
 
-          # 如果没有任何release，直接创建
+          # 首次发布时包含所有分支
           if [ "${{ steps.check-releases.outputs.no_releases }}" = "true" ]; then
-            RELEASE_NEEDED=true
-            RELEASE_BODY="Initial release"
-          else
-            for branch in gtl-1431 gtl-1431-skyblock; do
-              if [ -f "version-info-$branch/${branch}-changed.txt" ]; then
-                CHANGED=$(cat "version-info-$branch/${branch}-changed.txt")
-                VERSION=$(cat "version-info-$branch/${branch}-version.txt")
-                if [ "$CHANGED" = "true" ]; then
-                  RELEASE_NEEDED=true
-                  RELEASE_BODY="${RELEASE_BODY}\n- ${branch}: v${VERSION}"
-                fi
-              fi
-            done
+            MAIN_CHANGED=true
+            SKYBLOCK_CHANGED=true
           fi
 
-          echo "release_needed=$RELEASE_NEEDED" >> $GITHUB_OUTPUT
-          echo -e "release_body=$RELEASE_BODY" >> $GITHUB_OUTPUT
+          echo "main_changed=$MAIN_CHANGED" >> $GITHUB_OUTPUT
+          echo "skyblock_changed=$SKYBLOCK_CHANGED" >> $GITHUB_OUTPUT
+          echo "main_version=$MAIN_VERSION" >> $GITHUB_OUTPUT
+          echo "skyblock_version=$SKYBLOCK_VERSION" >> $GITHUB_OUTPUT
+
+          # 生成 release 名称和 tag
+          if [ "$MAIN_CHANGED" = "true" ] && [ "$SKYBLOCK_CHANGED" = "true" ]; then
+            TAG="v${MAIN_VERSION}_gtl-1431_v${SKYBLOCK_VERSION}_skyblock"
+            NAME="gtl-1431 v${MAIN_VERSION} & skyblock v${SKYBLOCK_VERSION}"
+            FILES="gtlcore-gtl-1431/*.jar
+          gtlcore-gtl-1431-skyblock/*.jar"
+          elif [ "$MAIN_CHANGED" = "true" ]; then
+            TAG="v${MAIN_VERSION}_gtl-1431"
+            NAME="gtl-1431 v${MAIN_VERSION}"
+            FILES="gtlcore-gtl-1431/*.jar"
+          elif [ "$SKYBLOCK_CHANGED" = "true" ]; then
+            TAG="v${SKYBLOCK_VERSION}_skyblock"
+            NAME="skyblock v${SKYBLOCK_VERSION}"
+            FILES="gtlcore-gtl-1431-skyblock/*.jar"
+          else
+            TAG=""
+            NAME=""
+            FILES=""
+          fi
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          if [ -n "$TAG" ]; then
+            echo "release_needed=true" >> $GITHUB_OUTPUT
+          else
+            echo "release_needed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create Release
         if: steps.prepare-release.outputs.release_needed == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.prepare-release.outputs.version }}
-          name: Release v${{ steps.prepare-release.outputs.version }}
+          tag_name: ${{ steps.prepare-release.outputs.tag }}
+          name: ${{ steps.prepare-release.outputs.name }}
           body: |
             Auto-release triggered by version update.
-
-            Changes:
-            ${{ steps.prepare-release.outputs.release_body }}
-
-            Download the appropriate jar for your branch:
-            - `gtlcore-gtl-1431` - Main branch build
-            - `gtlcore-gtl-1431-skyblock` - Skyblock branch build
-          files: |
-            gtlcore-gtl-1431/*.jar
-            gtlcore-gtl-1431-skyblock/*.jar
+          files: ${{ steps.prepare-release.outputs.files }}
           draft: false
           prerelease: false
         env:
