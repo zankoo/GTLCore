@@ -1,0 +1,168 @@
+name: Sync Fork, Build and Release
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 每天UTC 2:00运行
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        branch: [gtl-1431, gtl-1431-skyblock]
+
+    outputs:
+      gtl-1431-version: ${{ steps.check-version.outputs.version }}
+      gtl-1431-changed: ${{ steps.check-version.outputs.changed }}
+      gtl-1431-skyblock-version: ${{ steps.check-version.outputs.version }}
+      gtl-1431-skyblock-changed: ${{ steps.check-version.outputs.changed }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get version before sync
+        id: version-before
+        run: |
+          VERSION=$(grep "^mod_version=" gradle.properties | cut -d'=' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Sync fork from upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/AaAdoniSsS/GTLCore.git || true
+          git fetch upstream
+          git merge upstream/${{ matrix.branch }} --no-edit || echo "No changes to merge or merge conflict"
+          git push origin ${{ matrix.branch }} || echo "Nothing to push"
+
+      - name: Get version after sync
+        id: version-after
+        run: |
+          VERSION=$(grep "^mod_version=" gradle.properties | cut -d'=' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check version change
+        id: check-version
+        run: |
+          BEFORE="${{ steps.version-before.outputs.version }}"
+          AFTER="${{ steps.version-after.outputs.version }}"
+          echo "version=$AFTER" >> $GITHUB_OUTPUT
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Version changed from $BEFORE to $AFTER"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged: $AFTER"
+          fi
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: ./gradlew build --no-daemon
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtlcore-${{ matrix.branch }}
+          path: |
+            build/libs/*.jar
+            !build/libs/*-sources.jar
+          if-no-files-found: error
+
+      - name: Save version info
+        run: |
+          mkdir -p /tmp/version-info
+          echo "${{ steps.check-version.outputs.version }}" > /tmp/version-info/${{ matrix.branch }}-version.txt
+          echo "${{ steps.check-version.outputs.changed }}" > /tmp/version-info/${{ matrix.branch }}-changed.txt
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-info-${{ matrix.branch }}
+          path: /tmp/version-info/
+
+  release:
+    needs: sync-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Check existing releases
+        id: check-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_COUNT=$(gh release list --repo ${{ github.repository }} --limit 1 | wc -l)
+          if [ "$RELEASE_COUNT" -eq 0 ]; then
+            echo "no_releases=true" >> $GITHUB_OUTPUT
+          else
+            echo "no_releases=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for version changes
+        id: prepare-release
+        run: |
+          MAIN_CHANGED=false
+          SKYBLOCK_CHANGED=false
+          MAIN_VERSION=""
+          SKYBLOCK_VERSION=""
+
+          if [ -f "version-info-gtl-1431/gtl-1431-version.txt" ]; then
+            MAIN_VERSION=$(cat "version-info-gtl-1431/gtl-1431-version.txt")
+            MAIN_CHANGED=$(cat "version-info-gtl-1431/gtl-1431-changed.txt")
+          fi
+          if [ -f "version-info-gtl-1431-skyblock/gtl-1431-skyblock-version.txt" ]; then
+            SKYBLOCK_VERSION=$(cat "version-info-gtl-1431-skyblock/gtl-1431-skyblock-version.txt")
+            SKYBLOCK_CHANGED=$(cat "version-info-gtl-1431-skyblock/gtl-1431-skyblock-changed.txt")
+          fi
+
+          # 首次发布时包含所有分支
+          if [ "${{ steps.check-releases.outputs.no_releases }}" = "true" ]; then
+            MAIN_CHANGED=true
+            SKYBLOCK_CHANGED=true
+          fi
+
+          echo "main_changed=$MAIN_CHANGED" >> $GITHUB_OUTPUT
+          echo "skyblock_changed=$SKYBLOCK_CHANGED" >> $GITHUB_OUTPUT
+          echo "main_version=$MAIN_VERSION" >> $GITHUB_OUTPUT
+          echo "skyblock_version=$SKYBLOCK_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create gtl-1431 Release
+        if: steps.prepare-release.outputs.main_changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.prepare-release.outputs.main_version }}_gtl-1431
+          name: gtlcore-gtl-1431 v${{ steps.prepare-release.outputs.main_version }}
+          body: Auto-release triggered by version update.
+          files: gtlcore-gtl-1431/*.jar
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create gtl-1431-skyblock Release
+        if: steps.prepare-release.outputs.skyblock_changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.prepare-release.outputs.skyblock_version }}_gtl-1431-skyblock
+          name: gtlcore-gtl-1431-skyblock v${{ steps.prepare-release.outputs.skyblock_version }}
+          body: Auto-release triggered by version update.
+          files: gtlcore-gtl-1431-skyblock/*.jar
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
